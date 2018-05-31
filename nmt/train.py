@@ -15,6 +15,7 @@
 """For training NMT models."""
 from __future__ import print_function
 
+import collections
 import math
 import os
 import random
@@ -267,6 +268,10 @@ def before_train(loaded_train_model, train_model, train_sess, global_step,
 
   return stats, info, start_train_time
 
+class ExtraArgs(
+    collections.namedtuple("ExtraArgs",
+                           ("model_device_fn", "single_cell_fn"))):
+  pass
 
 def train(hparams, scope=None, target_session=""):
   """Train a translation model."""
@@ -293,7 +298,13 @@ def train(hparams, scope=None, target_session=""):
       raise ValueError("Unknown attention architecture %s" %
                        hparams.attention_architecture)
 
-  train_model = model_helper.create_train_model(model_creator, hparams, scope)
+  if hparams.is_distributed:
+      extra_args = ExtraArgs(model_device_fn=tf.train.replica_device_setter(
+          worker_device="job:worker/task:%d" % hparams.task_index, cluster=hparams.cluster
+      ), single_cell_fn=None)
+  else:
+      extra_args = None
+  train_model = model_helper.create_train_model(model_creator, hparams, scope, 1, 0, extra_args)
   eval_model = model_helper.create_eval_model(model_creator, hparams, scope)
   infer_model = model_helper.create_infer_model(model_creator, hparams, scope)
 
@@ -316,15 +327,28 @@ def train(hparams, scope=None, target_session=""):
       log_device_placement=log_device_placement,
       num_intra_threads=hparams.num_intra_threads,
       num_inter_threads=hparams.num_inter_threads)
-  train_sess = tf.Session(
-      target=target_session, config=config_proto, graph=train_model.graph)
+
+  if hparams.is_distributed:
+    with train_model.graph.as_default():
+      train_sess = tf.train.MonitoredTrainingSession(
+          master=target_session, config=config_proto,
+          is_chief=(hparams.task_index == 0),
+          checkpoint_dir=hparams.out_dir,
+          save_checkpoint_secs=None,
+          save_checkpoint_steps=None,
+          save_summaries_secs=None,
+          save_summaries_steps=None)
+  else:
+    train_sess = tf.Session(
+      master=target_session, config=config_proto, graph=train_model.graph)
+
   eval_sess = tf.Session(
       target=target_session, config=config_proto, graph=eval_model.graph)
   infer_sess = tf.Session(
       target=target_session, config=config_proto, graph=infer_model.graph)
 
   with train_model.graph.as_default():
-    loaded_train_model, global_step = model_helper.create_or_load_model(
+      loaded_train_model, global_step = model_helper.create_or_load_model(
         train_model.model, model_dir, train_sess, "train")
 
   # Summary writer

@@ -281,10 +281,20 @@ def add_arguments(parser):
                       help="Task id of the worker.")
   parser.add_argument("--num_workers", type=int, default=1,
                       help="Number of workers (inference only).")
-  parser.add_argument("--num_inter_threads", type=int, default=0,
+  parser.add_argument("--num_inter_threads", type=int, default=8,
                       help="number of inter_op_parallelism_threads")
-  parser.add_argument("--num_intra_threads", type=int, default=0,
+  parser.add_argument("--num_intra_threads", type=int, default=8,
                       help="number of intra_op_parallelism_threads")
+  # Flags for defining the tf.train.ClusterSpec
+  parser.add_argument("--ps_hosts", type=str, default="",
+                      help="Comma-separated list of hostname:port pairs")
+  parser.add_argument("--worker_hosts", type=str, default="",
+                      help="Comma-separated list of hostname:port pairs")
+  parser.add_argument("--job_name", type=str, default="",
+                      help="One of 'ps', 'worker'")
+  # Flags for defining the tf.train.Server
+  parser.add_argument("--task_index", type=int, default=0,
+                      help="Index of task within the job")
 
 
 def create_hparams(flags):
@@ -367,6 +377,11 @@ def create_hparams(flags):
       avg_ckpts=flags.avg_ckpts,
       num_intra_threads=flags.num_intra_threads,
       num_inter_threads=flags.num_inter_threads,
+      is_distributed=is_distributed(flags),
+      ps_hosts=flags.ps_hosts,
+      worker_hosts=flags.worker_hosts,
+      job_name=flags.job_name,
+      task_index=flags.task_index
   )
 
 
@@ -590,13 +605,37 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
     # Train
     train_fn(hparams, target_session=target_session)
 
+def is_distributed(FLAGS):
+    return all([FLAGS.ps_hosts is not None, FLAGS.worker_hosts is not None,
+                FLAGS.job_name is not None, FLAGS.task_index is not None])
 
 def main(unused_argv):
   default_hparams = create_hparams(FLAGS)
   train_fn = train.train
   inference_fn = inference.inference
-  run_main(FLAGS, default_hparams, train_fn, inference_fn)
 
+  if is_distributed(FLAGS):
+    print("Run in distributed mode")
+    # Get ps and worker name
+    ps_hosts = FLAGS.ps_hosts.split(",")
+    worker_hosts = FLAGS.worker_hosts.split(",")
+
+    # Create a cluster from the parameter server and worker hosts.
+    cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
+    default_hparams.add_hparam("cluster", cluster)
+
+    # Create and start a server for the local task.
+    server = tf.train.Server(cluster,
+                           job_name=FLAGS.job_name,
+                           task_index=FLAGS.task_index)
+
+    if FLAGS.job_name == "ps":
+      server.join()
+    elif FLAGS.job_name == "worker":
+        run_main(FLAGS, default_hparams, train_fn, inference_fn, server.target)
+  else:
+    print("Run in local mode")
+    run_main(FLAGS, default_hparams, train_fn, inference_fn)
 
 if __name__ == "__main__":
   nmt_parser = argparse.ArgumentParser()
