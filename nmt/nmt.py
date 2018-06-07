@@ -286,14 +286,14 @@ def add_arguments(parser):
   parser.add_argument("--num_intra_threads", type=int, default=8,
                       help="number of intra_op_parallelism_threads")
   # Flags for defining the tf.train.ClusterSpec
-  parser.add_argument("--ps_hosts", type=str, default="",
+  parser.add_argument("--ps_hosts", type=str, default=None,
                       help="Comma-separated list of hostname:port pairs")
-  parser.add_argument("--worker_hosts", type=str, default="",
+  parser.add_argument("--worker_hosts", type=str, default=None,
                       help="Comma-separated list of hostname:port pairs")
-  parser.add_argument("--job_name", type=str, default="",
+  parser.add_argument("--job_name", type=str, default=None,
                       help="One of 'ps', 'worker'")
   # Flags for defining the tf.train.Server
-  parser.add_argument("--task_index", type=int, default=0,
+  parser.add_argument("--task_index", type=int, default=None,
                       help="Index of task within the job")
 
 
@@ -378,6 +378,7 @@ def create_hparams(flags):
       num_intra_threads=flags.num_intra_threads,
       num_inter_threads=flags.num_inter_threads,
       is_distributed=is_distributed(flags),
+      is_chief=is_chief(flags),
       ps_hosts=flags.ps_hosts,
       worker_hosts=flags.worker_hosts,
       job_name=flags.job_name,
@@ -554,7 +555,7 @@ def create_or_load_hparams(
   return hparams
 
 
-def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
+def run_main(flags, default_hparams, train_fn, inference_fn, target_session="", cluster=None):
   """Run main."""
   # Job
   jobid = flags.jobid
@@ -603,11 +604,14 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
         utils.print_out("  %s: %.1f" % (metric, score))
   else:
     # Train
-    train_fn(hparams, target_session=target_session)
+    train_fn(hparams, target_session=target_session, cluster=cluster)
 
 def is_distributed(FLAGS):
     return all([FLAGS.ps_hosts is not None, FLAGS.worker_hosts is not None,
                 FLAGS.job_name is not None, FLAGS.task_index is not None])
+
+def is_chief(FLAGS):
+    return FLAGS.job_name == 'worker' and FLAGS.task_index == 0
 
 def main(unused_argv):
   default_hparams = create_hparams(FLAGS)
@@ -622,7 +626,6 @@ def main(unused_argv):
 
     # Create a cluster from the parameter server and worker hosts.
     cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
-    default_hparams.add_hparam("cluster", cluster)
 
     # Create and start a server for the local task.
     server = tf.train.Server(cluster,
@@ -632,7 +635,7 @@ def main(unused_argv):
     if FLAGS.job_name == "ps":
       server.join()
     elif FLAGS.job_name == "worker":
-        run_main(FLAGS, default_hparams, train_fn, inference_fn, server.target)
+        run_main(FLAGS, default_hparams, train_fn, inference_fn, server.target, cluster)
   else:
     print("Run in local mode")
     run_main(FLAGS, default_hparams, train_fn, inference_fn)

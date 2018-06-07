@@ -273,7 +273,7 @@ class ExtraArgs(
                            ("model_device_fn", "single_cell_fn"))):
   pass
 
-def train(hparams, scope=None, target_session=""):
+def train(hparams, scope=None, target_session="", cluster=None):
   """Train a translation model."""
   log_device_placement = hparams.log_device_placement
   out_dir = hparams.out_dir
@@ -300,13 +300,13 @@ def train(hparams, scope=None, target_session=""):
 
   if hparams.is_distributed:
       extra_args = ExtraArgs(model_device_fn=tf.train.replica_device_setter(
-          worker_device="job:worker/task:%d" % hparams.task_index, cluster=hparams.cluster
-      ), single_cell_fn=None)
+          worker_device="/job:worker/task:%d" % hparams.task_index, cluster=cluster),
+          single_cell_fn=None)
   else:
       extra_args = None
   train_model = model_helper.create_train_model(model_creator, hparams, scope, 1, 0, extra_args)
-  eval_model = model_helper.create_eval_model(model_creator, hparams, scope)
-  infer_model = model_helper.create_infer_model(model_creator, hparams, scope)
+  #eval_model = model_helper.create_eval_model(model_creator, hparams, scope)
+  #infer_model = model_helper.create_infer_model(model_creator, hparams, scope)
 
   # Preload data for sample decoding.
   dev_src_file = "%s.%s" % (hparams.dev_prefix, hparams.src)
@@ -328,48 +328,59 @@ def train(hparams, scope=None, target_session=""):
       num_intra_threads=hparams.num_intra_threads,
       num_inter_threads=hparams.num_inter_threads)
 
-  if hparams.is_distributed:
-    with train_model.graph.as_default():
-      train_sess = tf.train.MonitoredTrainingSession(
+  with train_model.graph.as_default():
+    print("target session = {0}".format(target_session))
+    #g = tf.get_default_graph()
+    #print(g.get_operations())
+    train_sess = tf.train.MonitoredTrainingSession(
           master=target_session, config=config_proto,
-          is_chief=(hparams.task_index == 0),
+          is_chief=hparams.is_chief,
           checkpoint_dir=hparams.out_dir,
-          save_checkpoint_secs=None,
-          save_checkpoint_steps=None,
+          save_checkpoint_secs=30,
           save_summaries_secs=None,
           save_summaries_steps=None)
-  else:
-    train_sess = tf.Session(
-      master=target_session, config=config_proto, graph=train_model.graph)
+    print("done train sess creation")
+    #if hparams.is_chief:
+    #  loaded_train_model, global_step = model_helper.create_or_load_model(
+    #    train_model.model, model_dir, train_sess, "train")
+    #else:
+    #  loaded_train_model = train_model.model
+    #  #global_step = train_model.global_step.eval(session=train_sess)
+    #  global_step = 0
+    loaded_train_model = train_model.model
+    train_sess.run(loaded_train_model.tables_init_op)
+    train_sess.run(loaded_train_model.init_ops)
+    train_sess.run(loaded_train_model.init_embed_ops)
+    print("done init ops")
+    global_step = loaded_train_model.global_step.eval(session=train_sess)
 
-  eval_sess = tf.Session(
-      target=target_session, config=config_proto, graph=eval_model.graph)
-  infer_sess = tf.Session(
-      target=target_session, config=config_proto, graph=infer_model.graph)
-
-  with train_model.graph.as_default():
-      loaded_train_model, global_step = model_helper.create_or_load_model(
-        train_model.model, model_dir, train_sess, "train")
+  #eval_sess = tf.Session(
+  #    target=target_session, config=config_proto, graph=eval_model.graph)
+  #infer_sess = tf.Session(
+  #    target=target_session, config=config_proto, graph=infer_model.graph)
 
   # Summary writer
   summary_writer = tf.summary.FileWriter(
       os.path.join(out_dir, summary_name), train_model.graph)
 
   # First evaluation
-  run_full_eval(
-      model_dir, infer_model, infer_sess,
-      eval_model, eval_sess, hparams,
-      summary_writer, sample_src_data,
-      sample_tgt_data, avg_ckpts)
+  #if hparams.is_chief:
+  #  run_full_eval(
+  #    model_dir, infer_model, infer_sess,
+  #    eval_model, eval_sess, hparams,
+  #    summary_writer, sample_src_data,
+  #    sample_tgt_data, avg_ckpts)
 
   last_stats_step = global_step
   last_eval_step = global_step
   last_external_eval_step = global_step
 
   # This is the training loop.
-  stats, info, start_train_time = before_train(
+  if hparams.is_chief:
+    stats, info, start_train_time = before_train(
       loaded_train_model, train_model, train_sess, global_step, hparams, log_f)
   while global_step < num_train_steps:
+    print("global_step = {0}, num_train_step = {1}".format(global_step, num_train_steps))
     ### Run a step ###
     start_time = time.time()
     try:
@@ -381,12 +392,13 @@ def train(hparams, scope=None, target_session=""):
       utils.print_out(
           "# Finished an epoch, step %d. Perform external evaluation" %
           global_step)
-      run_sample_decode(infer_model, infer_sess, model_dir, hparams,
+      if hparams.is_chief:
+        run_sample_decode(infer_model, infer_sess, model_dir, hparams,
                         summary_writer, sample_src_data, sample_tgt_data)
-      run_external_eval(infer_model, infer_sess, model_dir, hparams,
+        run_external_eval(infer_model, infer_sess, model_dir, hparams,
                         summary_writer)
 
-      if avg_ckpts:
+      if avg_ckpts and hparams.is_chief:
         run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
                               summary_writer, global_step)
 
@@ -420,44 +432,46 @@ def train(hparams, scope=None, target_session=""):
                         info["train_ppl"])
 
       # Save checkpoint
-      loaded_train_model.saver.save(
-          train_sess,
-          os.path.join(out_dir, "translate.ckpt"),
-          global_step=global_step)
+      #loaded_train_model.saver.save(
+      #    train_sess,
+      #    os.path.join(out_dir, "translate.ckpt"),
+      #    global_step=global_step)
 
       # Evaluate on dev/test
-      run_sample_decode(infer_model, infer_sess,
+      if hparams.is_chief:
+        run_sample_decode(infer_model, infer_sess,
                         model_dir, hparams, summary_writer, sample_src_data,
                         sample_tgt_data)
-      run_internal_eval(
+        run_internal_eval(
           eval_model, eval_sess, model_dir, hparams, summary_writer)
 
     if global_step - last_external_eval_step >= steps_per_external_eval:
       last_external_eval_step = global_step
 
       # Save checkpoint
-      loaded_train_model.saver.save(
-          train_sess,
-          os.path.join(out_dir, "translate.ckpt"),
-          global_step=global_step)
-      run_sample_decode(infer_model, infer_sess,
+      #loaded_train_model.saver.save(
+      #    train_sess,
+      #    os.path.join(out_dir, "translate.ckpt"),
+      #    global_step=global_step)
+      if hparams.is_chief:
+        run_sample_decode(infer_model, infer_sess,
                         model_dir, hparams, summary_writer, sample_src_data,
                         sample_tgt_data)
-      run_external_eval(
+        run_external_eval(
           infer_model, infer_sess, model_dir,
           hparams, summary_writer)
 
-      if avg_ckpts:
+      if avg_ckpts and hparams.is_chief:
         run_avg_external_eval(infer_model, infer_sess, model_dir, hparams,
                               summary_writer, global_step)
 
   # Done training
-  loaded_train_model.saver.save(
-      train_sess,
-      os.path.join(out_dir, "translate.ckpt"),
-      global_step=global_step)
-
-  (result_summary, _, final_eval_metrics) = (
+  #loaded_train_model.saver.save(
+  #    train_sess,
+  #    os.path.join(out_dir, "translate.ckpt"),
+  #    global_step=global_step)
+  if hparams.is_chief:
+    (result_summary, _, final_eval_metrics) = (
       run_full_eval(
           model_dir, infer_model, infer_sess, eval_model, eval_sess, hparams,
           summary_writer, sample_src_data, sample_tgt_data, avg_ckpts))
@@ -478,7 +492,7 @@ def train(hparams, scope=None, target_session=""):
                     result_summary, log_f)
     summary_writer.close()
 
-    if avg_ckpts:
+    if avg_ckpts and hparams.is_chief:
       best_model_dir = getattr(hparams, "avg_best_" + metric + "_dir")
       summary_writer = tf.summary.FileWriter(
           os.path.join(best_model_dir, summary_name), infer_model.graph)

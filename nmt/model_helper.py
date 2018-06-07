@@ -261,10 +261,12 @@ def _create_or_load_embed(embed_name, vocab_file, embed_file,
   """Create a new or load an existing embedding matrix."""
   if vocab_file and embed_file:
     embedding = _create_pretrained_emb_from_txt(vocab_file, embed_file)
+    print("read embedding from file")
   else:
     with tf.device(_get_embed_device(vocab_size)):
       embedding = tf.get_variable(
           embed_name, [vocab_size, embed_size], dtype)
+      print("create embedding")
   return embedding
 
 
@@ -481,7 +483,8 @@ def gradient_clip(gradients, max_gradient_norm):
 def load_model(model, ckpt, session, name):
   start_time = time.time()
   model.saver.restore(session, ckpt)
-  session.run(tf.tables_initializer())
+  #session.run(tf.tables_initializer())
+  session.run(model.tables_init_op)
   utils.print_out(
       "  loaded %s model parameters from %s, time %.2fs" %
       (name, ckpt, time.time() - start_time))
@@ -568,8 +571,9 @@ def create_or_load_model(model, model_dir, session, name):
     model = load_model(model, latest_ckpt, session, name)
   else:
     start_time = time.time()
-    session.run(tf.global_variables_initializer())
-    session.run(tf.tables_initializer())
+    #session.run(tf.global_variables_initializer())
+    #session.run(tf.tables_initializer())
+    session.run(model.init_ops)
     utils.print_out("  created %s model with fresh parameters, time %.2fs" %
                     (name, time.time() - start_time))
 

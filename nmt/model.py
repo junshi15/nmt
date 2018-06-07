@@ -94,9 +94,17 @@ class BaseModel(object):
     initializer = model_helper.get_initializer(
         hparams.init_op, hparams.random_seed, hparams.init_weight)
     tf.get_variable_scope().set_initializer(initializer)
+    print('scope = {0}, variable scope = {1}'.format(scope, tf.get_variable_scope().name))
 
     # Embeddings
-    self.init_embeddings(hparams, scope)
+    #self.init_embeddings(hparams, scope)
+    with tf.device("/cpu:0"):
+      self.embedding_encoder = tf.get_variable(
+          "embedding_encoder", [99, 128], tf.float32)
+      self.embedding_decoder = tf.get_variable(
+          "embedding_decoder", [99, 128], tf.float32)
+      print("create embedding")
+
     self.batch_size = tf.size(self.iterator.source_sequence_length)
 
     # Projection
@@ -125,7 +133,9 @@ class BaseModel(object):
       self.predict_count = tf.reduce_sum(
           self.iterator.target_sequence_length)
 
-    self.global_step = tf.Variable(0, trainable=False)
+    #self.global_step = tf.Variable(0, trainable=False)
+    self.global_step = tf.train.get_or_create_global_step()
+
     params = tf.trainable_variables()
 
     # Gradients and SGD update operation for training the model.
@@ -148,7 +158,8 @@ class BaseModel(object):
       gradients = tf.gradients(
           self.train_loss,
           params,
-          colocate_gradients_with_ops=hparams.colocate_gradients_with_ops)
+          colocate_gradients_with_ops=False)
+          #colocate_gradients_with_ops=hparams.colocate_gradients_with_ops)
 
       clipped_grads, grad_norm_summary, grad_norm = model_helper.gradient_clip(
           gradients, max_gradient_norm=hparams.max_gradient_norm)
@@ -169,6 +180,13 @@ class BaseModel(object):
     # Saver
     self.saver = tf.train.Saver(
         tf.global_variables(), max_to_keep=hparams.num_keep_ckpts)
+
+    # init_ops
+    self.init_ops = tf.group(tf.global_variables_initializer(),
+                             tf.local_variables_initializer(),
+                             tf.tables_initializer())
+    self.init_embed_ops = tf.initialize_variables([self.embedding_encoder, self.embedding_decoder])
+    self.tables_init_op = tf.tables_initializer()
 
     # Print trainable variables
     utils.print_out("# Trainable variables")
