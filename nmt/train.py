@@ -273,7 +273,7 @@ class ExtraArgs(
                            ("model_device_fn", "single_cell_fn"))):
   pass
 
-def train(hparams, scope=None, target_session=""):
+def train(hparams, scope=None, target_session="", cluster=None):
   """Train a translation model."""
   log_device_placement = hparams.log_device_placement
   out_dir = hparams.out_dir
@@ -300,8 +300,8 @@ def train(hparams, scope=None, target_session=""):
 
   if hparams.is_distributed:
       extra_args = ExtraArgs(model_device_fn=tf.train.replica_device_setter(
-          worker_device="job:worker/task:%d" % hparams.task_index, cluster=hparams.cluster
-      ), single_cell_fn=None)
+          worker_device="/job:worker/task:%d" % hparams.task_index, cluster=cluster),
+          single_cell_fn=None)
   else:
       extra_args = None
   train_model = model_helper.create_train_model(model_creator, hparams, scope, 1, 0, extra_args)
@@ -335,7 +335,6 @@ def train(hparams, scope=None, target_session=""):
           is_chief=(hparams.task_index == 0),
           checkpoint_dir=hparams.out_dir,
           save_checkpoint_secs=None,
-          save_checkpoint_steps=None,
           save_summaries_secs=None,
           save_summaries_steps=None)
   else:
@@ -356,11 +355,11 @@ def train(hparams, scope=None, target_session=""):
       os.path.join(out_dir, summary_name), train_model.graph)
 
   # First evaluation
-  run_full_eval(
-      model_dir, infer_model, infer_sess,
-      eval_model, eval_sess, hparams,
-      summary_writer, sample_src_data,
-      sample_tgt_data, avg_ckpts)
+  # run_full_eval(
+  #     model_dir, infer_model, infer_sess,
+  #     eval_model, eval_sess, hparams,
+  #     summary_writer, sample_src_data,
+  #     sample_tgt_data, avg_ckpts)
 
   last_stats_step = global_step
   last_eval_step = global_step

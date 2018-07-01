@@ -568,8 +568,8 @@ def create_or_load_model(model, model_dir, session, name):
     model = load_model(model, latest_ckpt, session, name)
   else:
     start_time = time.time()
-    session.run(tf.global_variables_initializer())
-    session.run(tf.tables_initializer())
+    #session.run(tf.global_variables_initializer())
+    #session.run(tf.tables_initializer())
     utils.print_out("  created %s model with fresh parameters, time %.2fs" %
                     (name, time.time() - start_time))
 

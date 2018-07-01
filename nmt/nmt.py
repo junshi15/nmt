@@ -58,7 +58,7 @@ def add_arguments(parser):
                       default=False,
                       help="Whether to add residual connections.")
   parser.add_argument("--time_major", type="bool", nargs="?", const=True,
-                      default=True,
+                      default=False,
                       help="Whether to use time-major mode for dynamic RNN.")
   parser.add_argument("--num_embeddings_partitions", type=int, default=0,
                       help="Number of partitions for embedding vars.")
@@ -122,7 +122,7 @@ def add_arguments(parser):
       "--num_train_steps", type=int, default=12000, help="Num steps to train.")
   parser.add_argument("--colocate_gradients_with_ops", type="bool", nargs="?",
                       const=True,
-                      default=True,
+                      default=False,
                       help=("Whether try colocating gradients with "
                             "corresponding op"))
 
@@ -554,7 +554,7 @@ def create_or_load_hparams(
   return hparams
 
 
-def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
+def run_main(flags, default_hparams, train_fn, inference_fn, target_session="", cluster=None):
   """Run main."""
   # Job
   jobid = flags.jobid
@@ -603,11 +603,14 @@ def run_main(flags, default_hparams, train_fn, inference_fn, target_session=""):
         utils.print_out("  %s: %.1f" % (metric, score))
   else:
     # Train
-    train_fn(hparams, target_session=target_session)
+    train_fn(hparams, target_session=target_session, cluster=cluster)
 
 def is_distributed(FLAGS):
     return all([FLAGS.ps_hosts is not None, FLAGS.worker_hosts is not None,
                 FLAGS.job_name is not None, FLAGS.task_index is not None])
+
+def is_chief(FLAGS):
+    return FLAGS.job_name == 'worker' and FLAGS.task_index == 0
 
 def main(unused_argv):
   default_hparams = create_hparams(FLAGS)
@@ -622,7 +625,6 @@ def main(unused_argv):
 
     # Create a cluster from the parameter server and worker hosts.
     cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
-    default_hparams.add_hparam("cluster", cluster)
 
     # Create and start a server for the local task.
     server = tf.train.Server(cluster,
@@ -632,12 +634,13 @@ def main(unused_argv):
     if FLAGS.job_name == "ps":
       server.join()
     elif FLAGS.job_name == "worker":
-        run_main(FLAGS, default_hparams, train_fn, inference_fn, server.target)
+        run_main(FLAGS, default_hparams, train_fn, inference_fn, server.target, cluster)
   else:
     print("Run in local mode")
     run_main(FLAGS, default_hparams, train_fn, inference_fn)
 
 if __name__ == "__main__":
+  tf.logging.set_verbosity(tf.logging.INFO)
   nmt_parser = argparse.ArgumentParser()
   add_arguments(nmt_parser)
   FLAGS, unparsed = nmt_parser.parse_known_args()
