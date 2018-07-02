@@ -127,6 +127,9 @@ class BaseModel(object):
 
     self.global_step = tf.train.get_or_create_global_step()
     params = tf.trainable_variables()
+    self.init_ops = tf.group(tf.global_variables_initializer(),
+                             tf.local_variables_initializer(),
+                             tf.tables_initializer())
 
     # Gradients and SGD update operation for training the model.
     # Arrage for the embedding vars to appear at the beginning.

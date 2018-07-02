@@ -122,7 +122,7 @@ def add_arguments(parser):
       "--num_train_steps", type=int, default=12000, help="Num steps to train.")
   parser.add_argument("--colocate_gradients_with_ops", type="bool", nargs="?",
                       const=True,
-                      default=False,
+                      default=True,
                       help=("Whether try colocating gradients with "
                             "corresponding op"))
 
@@ -285,15 +285,16 @@ def add_arguments(parser):
                       help="number of inter_op_parallelism_threads")
   parser.add_argument("--num_intra_threads", type=int, default=8,
                       help="number of intra_op_parallelism_threads")
+
   # Flags for defining the tf.train.ClusterSpec
-  parser.add_argument("--ps_hosts", type=str, default="",
+  parser.add_argument("--ps_hosts", type=str, default=None,
                       help="Comma-separated list of hostname:port pairs")
-  parser.add_argument("--worker_hosts", type=str, default="",
+  parser.add_argument("--worker_hosts", type=str, default=None,
                       help="Comma-separated list of hostname:port pairs")
-  parser.add_argument("--job_name", type=str, default="",
+  parser.add_argument("--job_name", type=str, default=None,
                       help="One of 'ps', 'worker'")
   # Flags for defining the tf.train.Server
-  parser.add_argument("--task_index", type=int, default=0,
+  parser.add_argument("--task_index", type=int, default=None,
                       help="Index of task within the job")
 
 
