@@ -390,11 +390,10 @@ class BaseModel(object):
       if self.mode != tf.contrib.learn.ModeKeys.INFER:
         # decoder_emp_inp: [max_time, batch_size, num_units]
         target_input = iterator.target_input
-        if self.time_major:
-          target_input = tf.transpose(target_input)
         decoder_emb_inp = tf.nn.embedding_lookup(
             self.embedding_decoder, target_input)
-
+        if self.time_major:
+            decoder_emb_inp = tf.transpose(decoder_emb_inp, [1, 0, 2])
         # Helper
         helper = tf.contrib.seq2seq.TrainingHelper(
             decoder_emb_inp, iterator.target_sequence_length,
@@ -560,14 +559,14 @@ class Model(BaseModel):
     iterator = self.iterator
 
     source = iterator.source
-    if self.time_major:
-      source = tf.transpose(source)
 
     with tf.variable_scope("encoder") as scope:
       dtype = scope.dtype
       # Look up embedding, emp_inp: [max_time, batch_size, num_units]
       encoder_emb_inp = tf.nn.embedding_lookup(
           self.embedding_encoder, source)
+      if self.time_major:
+          encoder_emb_inp = tf.transpose(encoder_emb_inp, [1, 0, 2])
 
       # Encoder_outputs: [max_time, batch_size, num_units]
       if hparams.encoder_type == "uni":
